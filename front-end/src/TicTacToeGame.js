@@ -22,7 +22,7 @@ const TicTacToeGame = () => {
     const [isPlayersTurn, setIsPlayersTurn] = useState(false);
 
     useEffect(() => {
-        let newSocket = socketIoClient('http://127.0.0.1:8080');
+        let newSocket = socketIoClient('https://react-tic-tac-toe-shaun.herokuapp.com/');
         setSocket(newSocket);
 
         newSocket.on('info', data => {
