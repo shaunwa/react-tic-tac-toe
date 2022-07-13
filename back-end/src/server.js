@@ -2,6 +2,7 @@ import http from 'http';
 import express from 'express';
 import path from 'path';
 import { Server } from 'socket.io';
+import { v4 as uuid } from 'uuid';
 import getNextGameState from './getNextGameState.js';
 import {
     RUNNING,
@@ -35,54 +36,95 @@ const getStartingMatrix = () => {
     ];
 }
 
-let currentPlayer = 'X';
+let gamesInProgress = {};
 
-let playerXMoves = getStartingMatrix();
-let playerOMoves = getStartingMatrix();
-
-let playerXSocket;
-let playerOSocket;
+function createNewGame(isAutoJoin) {
+    return {
+        id: uuid(),
+        playerXSocket: null,
+        playerOSocket: null,
+        playerXMoves: getStartingMatrix(),
+        playerOMoves: getStartingMatrix(),
+        currentPlayer: 'X',
+        isAutoJoin,
+    };
+}
 
 io.on('connection', socket => {
-    if (playerXSocket) {
-        playerOSocket = socket;
-        playerOSocket.emit('start');
-        playerXSocket.emit('start');
-        playerOSocket.emit('other player turn');
-        playerXSocket.emit('your turn');
-        console.log('Player O has joined! Starting the game...');
+    const { shouldCreateGame, gameId } = socket.handshake.query;
+    console.log({ shouldCreateGame, gameId });
+
+    let existingGame;
+
+    if (gameId) {
+        existingGame = gamesInProgress[gameId];
+    } else {
+        existingGame = Object.values(gamesInProgress)
+            .find(game => game.isAutoJoin && game.playerXSocket && !game.playerOSocket);
+    }
+    let game;
+
+    if (existingGame && !shouldCreateGame) {
+        game = existingGame;
+        game.playerOSocket = socket;
+        game.playerOSocket.emit('start');
+        game.playerXSocket.emit('start');
+        game.playerOSocket.emit('other player turn');
+        game.playerXSocket.emit('your turn');
+        console.log(`Player O has joined game ${game.id}! Starting the game...`);
 
         socket.on('disconnect', () => {
-            playerOSocket = undefined;
+            game.playerOSocket = undefined;
 
-            if (playerXSocket) {
-                playerXSocket.emit('info', 'The other player has disconnected, ending the game...');
-                playerXSocket.disconnect();
-                playerXSocket = undefined;
+            if (game.playerXSocket) {
+                game.playerXSocket.emit('info', 'The other player has disconnected, ending the game...');
+                game.playerXSocket.disconnect();
+                game.playerXSocket = undefined;
             }
+
+            delete gamesInProgress[game.id];
         });
     } else {
-        playerXSocket = socket;
-        console.log('Player X has joined! Waiting for player O');
+        const newGame = createNewGame(!shouldCreateGame);
+        gamesInProgress[newGame.id] = newGame;
+
+        if (shouldCreateGame) {
+            socket.emit('gameId', newGame.id);
+        }
+
+        newGame.playerXSocket = socket;
+        console.log(`Player X has joined game ${newGame.id}! Waiting for player O`);
 
         socket.on('disconnect', () => {
-            playerXSocket = undefined;
+            newGame.playerXSocket = undefined;
 
-            if (playerOSocket) {
-                playerOSocket.emit('info', 'The other player has disconnected, ending the game...');
-                playerOSocket.disconnect();
-                playerOSocket = undefined;
+            if (newGame.playerOSocket) {
+                newGame.playerOSocket.emit('info', 'The other player has disconnected, ending the game...');
+                newGame.playerOSocket.disconnect();
+                newGame.playerOSocket = undefined;
             }
+
+            delete gamesInProgress[newGame.id];
         });
+
+        game = newGame;
     }
 
     socket.on('new move', (row, column) => {
+        const {
+            currentPlayer,
+            playerXSocket,
+            playerOSocket,
+            playerXMoves,
+            playerOMoves,
+        } = game;
+
         if (currentPlayer === 'X' && socket === playerXSocket) {
             playerXMoves[row][column] = 1;
-            currentPlayer = 'O';
+            game.currentPlayer = 'O';
         } else if (currentPlayer === 'O' && socket === playerOSocket) {
             playerOMoves[row][column] = 1;
-            currentPlayer = 'X';
+            game.currentPlayer = 'X';
         }
 
         const nextGameState = getNextGameState(playerXMoves, playerOMoves);
@@ -105,22 +147,25 @@ io.on('connection', socket => {
         if (nextGameState === PLAYER_X_WINS) {
             playerXSocket.emit('win');
             playerOSocket.emit('lose');
-            playerOMoves = getStartingMatrix();
-            playerXMoves = getStartingMatrix();
+            playerXSocket.disconnect();
+            playerOSocket.disconnect();
+            delete gamesInProgress[game.id];
         }
 
         if (nextGameState === PLAYER_O_WINS) {
             playerXSocket.emit('lose');
             playerOSocket.emit('win');
-            playerOMoves = getStartingMatrix();
-            playerXMoves = getStartingMatrix();
+            playerXSocket.disconnect();
+            playerOSocket.disconnect();
+            delete gamesInProgress[game.id];
         }
 
         if (nextGameState === CATS_GAME) {
             playerXSocket.emit('tie');
             playerOSocket.emit('tie');
-            playerOMoves = getStartingMatrix();
-            playerXMoves = getStartingMatrix();
+            playerXSocket.disconnect();
+            playerOSocket.disconnect();
+            delete gamesInProgress[game.id];
         }
     });
 });

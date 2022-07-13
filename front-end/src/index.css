@@ -1,3 +1,12 @@
+button {
+  width: 400px;
+  background-color: black;
+  color: white;
+  margin-bottom: 16px;
+  font-size: 32px;
+  padding: 16px;
+}
+
 table {
   border-collapse: collapse;
 }
